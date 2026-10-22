@@ -106,7 +106,7 @@ Before deploying the project, ensure you have the following:
 - An IAM identity with the permissions required to create and manage the AWS resources defined in the Terraform configuration.
 - AWS Access Key ID and Secret Access Key, if using IAM user access keys.
 - [Terraform installed on your local machine.](https://developer.hashicorp.com/terraform/install)
-- [AWS CLI installed](https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html)
+- [AWS CLI installed.](https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html)
 - Git installed.
 - SSH key pair or another supported method for securely accessing the EC2 instances.
 - Basic knowledge of AWS networking, Terraform, Linux, and Kubernetes.
@@ -248,13 +248,12 @@ Review the execution plan and type yes when Terraform requests confirmation.
 
 Terraform will provision the AWS resources declared in the configuration.
 
-Depending on the implementation, these resources may include:
+Depending on the implementation, these resources include:
 
 - VPC and subnets.
 - Internet gateway and route tables.
 - EC2 instances.
 - Security groups.
-- Instance profiles and IAM policies.
 - Bootstrap scripts or configuration resources.
 
 The exact resources depend on the Terraform files in the repository.
