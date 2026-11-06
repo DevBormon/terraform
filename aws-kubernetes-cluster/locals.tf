@@ -51,7 +51,7 @@ locals {
     worker-1 = merge(
       local.common, local.k8s_config,
       {
-        subnet_id              = aws_subnet.subnet_private_1.id
+        subnet_id              = aws_subnet.subnet_private_2.id
         vpc_security_group_ids = [aws_security_group.my_sg["k8s-worker-sg"].id]
       }
     )
