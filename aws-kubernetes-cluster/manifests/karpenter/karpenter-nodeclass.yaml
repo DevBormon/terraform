@@ -1,0 +1,56 @@
+apiVersion: karpenter.k8s.aws/v1
+kind: EC2NodeClass
+metadata:
+  name: default
+spec:
+  amiSelectorTerms:
+    - id: "ami-0199ac7c9fbf9ed83" # Use the same Ubuntu AMI base as your master node
+  subnetSelectorTerms:
+    - tags:
+        Name: "k8s-subnet-private-*" # Matches your private subnets
+  securityGroupSelectorTerms:
+    - tags:
+        Name: "k8s-worker-sg" # Adjust to match your worker/cluster security group ID tag
+  role: "k8s-worker-role"
+  userData: |
+    #!/bin/bash -l
+    set -e
+
+    # Configure persistent APT proxy
+    <<EOF | sudo tee /etc/apt/apt.conf.d/80proxy
+    Acquire::http::Proxy "http://${BASTION_HOST_PRIVATE_IP}:3128";
+    Acquire::https::Proxy "http://${BASTION_HOST_PRIVATE_IP}:3128";
+    EOF
+
+    # Configure persistent curl proxy and IPv4
+    <<EOF | sudo tee ~/.curlrc
+    proxy = "http://${BASTION_HOST_PRIVATE_IP}:3128"
+    ipv4
+    EOF
+
+    sudo apt update
+    sudo apt install curl awscli -y
+
+    # Configure persistent AWS CLI proxy
+    <<EOF | sudo tee /etc/profile.d/k8s-proxy.sh
+    export HTTP_PROXY=http://${BASTION_HOST_PRIVATE_IP}:3128
+    export HTTPS_PROXY=http://${BASTION_HOST_PRIVATE_IP}:3128
+    export NO_PROXY=169.254.169.254,localhost,127.0.0.1,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,.svc,.cluster.local
+    EOF
+
+    sudo chmod +x /etc/profile.d/k8s-proxy.sh
+
+    source /etc/profile.d/k8s-proxy.sh
+
+    # Configure sudo to preserve proxy environment variables
+    <<EOF | sudo tee /etc/sudoers.d/proxy
+    Defaults env_keep += "HTTP_PROXY HTTPS_PROXY NO_PROXY http_proxy https_proxy no_proxy"
+    EOF
+
+    # Download Kubernetes setup scripts from S3
+    sudo mkdir -p /opt/k8s/k8s_setup
+
+    sudo aws s3 sync s3://${BUCKET}/k8s_setup/ /opt/k8s/k8s_setup/
+
+    # Execute script
+    bash /opt/k8s/k8s_setup/worker_node_template.sh ${BASTION_HOST_PRIVATE_IP} ${BUCKET} ${REGION} ${STM_PARAMETER_PATH}

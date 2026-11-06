@@ -2,7 +2,7 @@
 resource "aws_vpc" "vpc" {
   cidr_block = "10.0.0.0/16"
   tags = {
-    Name = "bormon-vpc"
+    Name = "k8s-vpc"
   }
 }
 
@@ -10,7 +10,7 @@ resource "aws_vpc" "vpc" {
 resource "aws_internet_gateway" "igw" {
   vpc_id = aws_vpc.vpc.id
   tags = {
-    Name = "bormon-igw"
+    Name = "k8s-igw"
   }
 }
 
@@ -20,7 +20,7 @@ resource "aws_subnet" "subnet_public_1" {
   cidr_block        = "10.0.0.0/20"
   availability_zone = "ap-south-2a"
   tags = {
-    Name = "bormon-subnet-public1-ap-south-2a"
+    Name = "k8s-subnet-public-1-ap-south-2a"
   }
 }
 
@@ -29,7 +29,7 @@ resource "aws_subnet" "subnet_public_2" {
   cidr_block        = "10.0.16.0/20"
   availability_zone = "ap-south-2b"
   tags = {
-    Name = "bormon-subnet-public2-ap-south-2b"
+    Name = "k8s-subnet-public-2-ap-south-2b"
   }
 }
 
@@ -38,7 +38,7 @@ resource "aws_subnet" "subnet_private_1" {
   cidr_block        = "10.0.128.0/20"
   availability_zone = "ap-south-2a"
   tags = {
-    Name = "bormon-subnet-private1-ap-south-2a"
+    Name = "k8s-subnet-private-1-ap-south-2a"
   }
 }
 
@@ -47,7 +47,7 @@ resource "aws_subnet" "subnet_private_2" {
   cidr_block        = "10.0.144.0/20"
   availability_zone = "ap-south-2b"
   tags = {
-    Name = "bormon-subnet-private2-ap-south-2b"
+    Name = "k8s-subnet-private-2-ap-south-2b"
   }
 }
 
@@ -58,21 +58,21 @@ resource "aws_route_table" "route_table_public" {
     gateway_id = aws_internet_gateway.igw.id
   }
   tags = {
-    Name = "bormon-rtb-public"
+    Name = "k8s-rtb-public"
   }
 }
 
 resource "aws_route_table" "route_table_private_1" {
   vpc_id = aws_vpc.vpc.id
   tags = {
-    Name = "bormon-rtb-private1-ap-south-2a"
+    Name = "k8s-rtb-private-1-ap-south-2a"
   }
 }
 
 resource "aws_route_table" "route_table_private_2" {
   vpc_id = aws_vpc.vpc.id
   tags = {
-    Name = "bormon-rtb-private1-ap-south-2b"
+    Name = "k8s-rtb-private-1-ap-south-2b"
   }
 }
 
