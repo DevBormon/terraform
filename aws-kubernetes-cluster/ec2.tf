@@ -549,8 +549,6 @@ resource "terraform_data" "join_worker" {
   }
 }
 
-
-
 resource "terraform_data" "configure_node_zones" {
   depends_on = [
     terraform_data.join_worker
@@ -810,6 +808,32 @@ resource "terraform_data" "karpenter_manifest_apply" {
         kubectl apply -f /tmp/karpenter-nodeclass.yaml
         kubectl apply -f /opt/k8s/k8s_manifest/karpenter/karpenter-nodepool.yaml
       EOT
+    ]
+  }
+}
+
+resource "terraform_data" "install_tmux" {
+  depends_on = [
+    aws_instance.instances["bastion_host"],
+    aws_instance.instances["master"],
+    terraform_data.configure_apt_proxy,
+    terraform_data.karpenter_manifest_apply
+  ]
+  connection {
+    type        = "ssh"
+    host        = aws_instance.instances["master"].private_ip
+    user        = "ubuntu"
+    private_key = file(local.access_key)
+
+    bastion_host        = aws_instance.instances["bastion_host"].public_ip
+    bastion_user        = "ubuntu"
+    bastion_private_key = file(local.access_key)
+  }
+
+  provisioner "remote-exec" {
+    inline = [
+      "sudo apt update",
+      "sudo apt install tmux -y"
     ]
   }
 }
