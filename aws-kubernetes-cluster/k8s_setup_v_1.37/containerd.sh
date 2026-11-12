@@ -14,12 +14,19 @@ sysctl net.ipv4.ip_forward
 sudo apt update
 sudo apt install containerd -y
 
-# Configure containerd with defaults and restart with this config
-sudo mkdir -p /etc/containerd/
+# Configure containerd only if configuration does not exist
+if [ ! -f /etc/containerd/config.toml ]; then
 
-containerd config default | sudo tee /etc/containerd/config.toml
+    # Configure containerd with defaults and restart with this config
+    sudo mkdir -p /etc/containerd/
 
-sudo sed -i 's/SystemdCgroup = false/SystemdCgroup = true/' /etc/containerd/config.toml
+    containerd config default | sudo tee /etc/containerd/config.toml
 
-sudo systemctl enable --now containerd
-sudo systemctl restart containerd
+    sudo sed -i 's/SystemdCgroup = false/SystemdCgroup = true/' /etc/containerd/config.toml
+
+    sudo systemctl enable --now containerd
+    sudo systemctl restart containerd
+
+else
+    echo "Containerd configuration already exists. Skipping configuration."
+fi

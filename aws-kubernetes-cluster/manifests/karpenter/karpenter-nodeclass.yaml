@@ -1,10 +1,11 @@
 apiVersion: karpenter.k8s.aws/v1
 kind: EC2NodeClass
 metadata:
-  name: default
+  name: kp-nodeclass
 spec:
+  amiFamily: Custom
   amiSelectorTerms:
-    - id: "ami-0199ac7c9fbf9ed83" # Use the same Ubuntu AMI base as your master node
+    - id: "ami-0199ac7c9fbf9ed83" # Ubuntu AMI
   subnetSelectorTerms:
     - tags:
         Name: "k8s-subnet-private-*" # Matches your private subnets
@@ -12,45 +13,70 @@ spec:
     - tags:
         Name: "k8s-worker-sg" # Adjust to match your worker/cluster security group ID tag
   role: "k8s-worker-role"
+  tags:
+    Environment: kubernetes
+    NodeType: worker
+    ManagedBy: karpenter
   userData: |
     #!/bin/bash -l
-    set -e
+    set -euxo pipefail
+
+    exec > >(tee -a /var/log/karpenter-worker-bootstrap.log) 2>&1
 
     # Configure persistent APT proxy
-    <<EOF | sudo tee /etc/apt/apt.conf.d/80proxy
+    tee /etc/apt/apt.conf.d/80proxy >/dev/null <<EOF
     Acquire::http::Proxy "http://${BASTION_HOST_PRIVATE_IP}:3128";
     Acquire::https::Proxy "http://${BASTION_HOST_PRIVATE_IP}:3128";
     EOF
 
-    # Configure persistent curl proxy and IPv4
-    <<EOF | sudo tee ~/.curlrc
+    # Configure curl proxy and IPv4
+    tee /root/.curlrc >/dev/null <<EOF
     proxy = "http://${BASTION_HOST_PRIVATE_IP}:3128"
     ipv4
     EOF
 
-    sudo apt update
-    sudo apt install curl awscli -y
+    apt update
+    apt install -y curl awscli
 
-    # Configure persistent AWS CLI proxy
-    <<EOF | sudo tee /etc/profile.d/k8s-proxy.sh
+    # Configure proxy environment variables
+    tee /etc/profile.d/k8s-proxy.sh >/dev/null <<EOF
     export HTTP_PROXY=http://${BASTION_HOST_PRIVATE_IP}:3128
     export HTTPS_PROXY=http://${BASTION_HOST_PRIVATE_IP}:3128
     export NO_PROXY=169.254.169.254,localhost,127.0.0.1,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,.svc,.cluster.local
     EOF
-
-    sudo chmod +x /etc/profile.d/k8s-proxy.sh
-
+    chmod +x /etc/profile.d/k8s-proxy.sh
     source /etc/profile.d/k8s-proxy.sh
 
-    # Configure sudo to preserve proxy environment variables
-    <<EOF | sudo tee /etc/sudoers.d/proxy
-    Defaults env_keep += "HTTP_PROXY HTTPS_PROXY NO_PROXY http_proxy https_proxy no_proxy"
-    EOF
+    # Get EC2 metadata using IMDSv2
+    TOKEN=$(curl --noproxy '*' -fsS -X PUT "http://169.254.169.254/latest/api/token" -H "X-aws-ec2-metadata-token-ttl-seconds: 21600")
+
+    INSTANCE_ID=$(curl --noproxy '*' -fsS -H "X-aws-ec2-metadata-token: $TOKEN" "http://169.254.169.254/latest/meta-data/instance-id")
+
+    AZ=$(curl --noproxy '*' -fsS -H "X-aws-ec2-metadata-token: $TOKEN" http://169.254.169.254/latest/meta-data/placement/availability-zone)
+
+    PROVIDER_ID="aws:///${AZ}/${INSTANCE_ID}"
+
+    # Give the Kubernetes node a unique name
+    NODE_NAME="worker-${INSTANCE_ID}"
+
+    # Create SSH access
+    aws ssm get-parameter --name "${SSH_PUBLIC_KEY_PARAMETER}" --with-decryption --query "Parameter.Value" --region "${REGION}" --output text > /home/ubuntu/.ssh/authorized_keys
+
+    # Add a Name tag to the EC2 instance
+    aws ec2 create-tags --resources "$INSTANCE_ID" --tags "Key=Name,Value=${NODE_NAME}" --region "$REGION" || echo "WARNING: Failed to tag instance, continuing..."
+
+    chmod 400 /home/ubuntu/.ssh/authorized_keys
+    chown -R ubuntu:ubuntu /home/ubuntu/.ssh
 
     # Download Kubernetes setup scripts from S3
-    sudo mkdir -p /opt/k8s/k8s_setup
+    mkdir -p /opt/k8s/k8s_setup
+    aws s3 sync "s3://${BUCKET}/k8s_setup/" /opt/k8s/k8s_setup/
 
-    sudo aws s3 sync s3://${BUCKET}/k8s_setup/ /opt/k8s/k8s_setup/
-
-    # Execute script
-    bash /opt/k8s/k8s_setup/worker_node_template.sh ${BASTION_HOST_PRIVATE_IP} ${BUCKET} ${REGION} ${STM_PARAMETER_PATH}
+    # Run the worker setup script
+    bash /opt/k8s/k8s_setup/worker_node_template.sh \
+      "${BASTION_HOST_PRIVATE_IP}" \
+      "${BUCKET}" \
+      "${REGION}" \
+      "${SSM_PARAMETER_PATH}" \
+      "${NODE_NAME}" \
+      "${PROVIDER_ID}"

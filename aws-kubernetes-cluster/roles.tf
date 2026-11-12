@@ -95,7 +95,10 @@ resource "aws_iam_role_policy" "master_policy" {
           "ssm:PutParameter",
           "ssm:AddTagsToResource"
         ]
-        Resource = "arn:aws:ssm:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:parameter${local.ssm_parameter_path}"
+        Resource = [
+          "arn:aws:ssm:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:parameter${local.ssm_join_command_path}",
+          "arn:aws:ssm:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:parameter${local.ssm_ssh_key_path}"
+        ]
       },
       {
         Sid    = "ListK8sSetupAndManifestFiles"
@@ -132,10 +135,21 @@ resource "aws_iam_role_policy" "worker_policy" {
   policy = jsonencode({
     Version = "2012-10-17"
     Statement = [{
-      Sid      = "AllowReadParameter"
-      Effect   = "Allow"
-      Action   = "ssm:GetParameter"
-      Resource = "arn:aws:ssm:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:parameter${local.ssm_parameter_path}"
+      Sid    = "AllowReadParameter"
+      Effect = "Allow"
+      Action = "ssm:GetParameter"
+      Resource = [
+        "arn:aws:ssm:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:parameter${local.ssm_join_command_path}",
+        "arn:aws:ssm:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:parameter${local.ssm_ssh_key_path}"
+      ]
+      },
+      {
+        Sid    = "AllowWorkerCreateTags"
+        Effect = "Allow"
+        Action = [
+          "ec2:CreateTags"
+        ]
+        Resource = "arn:aws:ec2:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:instance/*"
       },
       {
         Sid    = "ListK8sSetupAndManifestFiles"

@@ -28,5 +28,5 @@ sudo apt update
 sudo apt install kubelet kubeadm kubectl -y
 sudo apt-mark hold kubelet kubeadm kubectl
 
-echo "[6/6] Enabling kubelet service..."
+echo "[6/6] Enabling and start kubelet service..."
 sudo systemctl enable --now kubelet

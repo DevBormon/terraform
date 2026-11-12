@@ -13,12 +13,17 @@ resource "aws_instance" "instances" {
     volume_type = each.value.volume_type
   }
   tags = {
-    Name = each.key
+    Name     = each.key
+    NodeType = each.key == "master" ? "master" : each.key == "bastion_host" ? "bastion" : "worker"
   }
 }
 
 resource "terraform_data" "upload_pem" {
-  depends_on = [aws_instance.instances["bastion_host"]]
+  depends_on = [
+    aws_instance.instances["bastion_host"],
+    aws_instance.instances["master"]
+  ]
+
   connection {
     type        = "ssh"
     host        = aws_instance.instances["bastion_host"].public_ip
@@ -28,12 +33,17 @@ resource "terraform_data" "upload_pem" {
 
   provisioner "file" {
     source      = local.access_key
-    destination = "/home/ubuntu/.ssh/aws-login.pem"
+    destination = "/home/ubuntu/.ssh/${local.common.key_name}.pem"
   }
 
   provisioner "remote-exec" {
     inline = [
-      "chmod 400 /home/ubuntu/.ssh/aws-login.pem"
+      "chmod 400 /home/ubuntu/.ssh/${local.common.key_name}.pem",
+
+      "ssh-keygen -y -f ~/.ssh/${local.common.key_name}.pem > ~/.ssh/${local.common.key_name}.pub",
+
+      # Use absolute paths explicitly so scp doesn't misinterpret home directories
+      "scp -o StrictHostKeyChecking=no -i /home/ubuntu/.ssh/${local.common.key_name}.pem /home/ubuntu/.ssh/${local.common.key_name}.pub ubuntu@${aws_instance.instances["master"].private_ip}:/tmp/${local.common.key_name}.pub"
     ]
   }
 }
@@ -199,12 +209,41 @@ resource "terraform_data" "install_and_configure_aws_cli_proxy" {
   }
 }
 
+resource "terraform_data" "ssh_key_upload" {
+  depends_on = [
+    terraform_data.upload_pem,
+    terraform_data.install_and_configure_aws_cli_proxy
+  ]
+
+  connection {
+    type        = "ssh"
+    host        = aws_instance.instances["master"].private_ip
+    user        = "ubuntu"
+    private_key = file(local.access_key)
+
+    bastion_host        = aws_instance.instances["bastion_host"].public_ip
+    bastion_user        = "ubuntu"
+    bastion_private_key = file(local.access_key)
+  }
+
+  provisioner "remote-exec" {
+    inline = [
+      "#!/bin/bash -l",
+      "aws ssm put-parameter --name \"${local.ssm_ssh_key_path}\" --type SecureString --value \"$(cat /tmp/${local.common.key_name}.pub)\" --overwrite --region \"${data.aws_region.current.region}\" >/dev/null"
+    ]
+  }
+}
+
 resource "terraform_data" "install_containerd" {
   for_each = toset(["master", "worker-1"])
   depends_on = [
     terraform_data.configure_apt_proxy,
     terraform_data.upload_k8s_setup_to_s3,
     terraform_data.install_and_configure_aws_cli_proxy
+  ]
+
+  triggers_replace = [
+    terraform_data.upload_k8s_setup_to_s3
   ]
 
   connection {
@@ -223,17 +262,9 @@ resource "terraform_data" "install_containerd" {
       # Terraform uses that first line as the script's shebang. The -l flag makes bash a login shell, so it reads /etc/profile, which loads /etc/profile.d/k8s-proxy.sh
       "#!/bin/bash -l",
       "set -e",
-      "echo '===== CHECK CURRENT SHELL PROXY ====='",
-      "env | grep -i proxy || true",
-
-      "echo '===== SUDO CHECK CURRENT SHELL PROXY ====='",
-      "sudo env | grep -i proxy || true",
 
       "echo '===== DIR CREATED ====='",
       "sudo mkdir -p /opt/k8s/k8s_setup",
-
-      "echo '===== GET CALLER IDENTITY ====='",
-      "aws sts get-caller-identity",
 
       "echo '===== AWS SYNC ====='",
       "sudo aws s3 sync s3://${aws_s3_bucket.k8s_bucket.bucket}/k8s_setup/ /opt/k8s/k8s_setup/",
@@ -466,7 +497,7 @@ resource "terraform_data" "join_token_refresh" {
         Type=oneshot
         User=root
         
-        ExecStart=/opt/k8s/k8s_setup/kubeadm_join_command.sh ${local.ssm_parameter_path} ${data.aws_region.current.region}
+        ExecStart=/opt/k8s/k8s_setup/kubeadm_join_command.sh ${local.ssm_join_command_path} ${data.aws_region.current.region}
         EOF
       EOT
       ,
@@ -529,7 +560,7 @@ resource "terraform_data" "join_worker" {
 
         while [ -z "$JOIN_CMD" ]; do
             JOIN_CMD=$(aws ssm get-parameter \
-                --name "${local.ssm_parameter_path}" \
+                --name "${local.ssm_join_command_path}" \
                 --with-decryption \
                 --query "Parameter.Value" \
                 --output text \
@@ -713,6 +744,14 @@ resource "terraform_data" "karpenter_deploying" {
     terraform_data.configure_node_zones
   ]
 
+  triggers_replace = [
+    local.cluster_name,
+    local.karpenter_service_account_name,
+    aws_iam_role.karpenter_role.arn,
+    aws_instance.instances["master"].private_ip,
+    aws_instance.instances["bastion_host"].private_ip
+  ]
+
   connection {
     type        = "ssh"
     host        = aws_instance.instances["master"].private_ip
@@ -735,6 +774,7 @@ resource "terraform_data" "karpenter_deploying" {
         helm upgrade --install karpenter \
           oci://public.ecr.aws/karpenter/karpenter \
           --version 1.15.1 \
+          --set logLevel=debug \
           --namespace ${local.karpenter_ns} \
           --create-namespace \
           --set settings.clusterName=${local.cluster_name} \
@@ -774,6 +814,11 @@ resource "terraform_data" "karpenter_manifest_apply" {
     terraform_data.upload_manifests_to_s3
   ]
 
+  triggers_replace = [
+    terraform_data.upload_manifests_to_s3,
+    terraform_data.karpenter_deploying
+  ]
+
   connection {
     type        = "ssh"
     host        = aws_instance.instances["master"].private_ip
@@ -799,15 +844,19 @@ resource "terraform_data" "karpenter_manifest_apply" {
         export BASTION_HOST_PRIVATE_IP="${aws_instance.instances["bastion_host"].private_ip}"
         export BUCKET="${aws_s3_bucket.k8s_bucket.bucket}"
         export REGION="${data.aws_region.current.region}"
-        export STM_PARAMETER_PATH="${local.ssm_parameter_path}"
+        export SSM_PARAMETER_PATH="${local.ssm_join_command_path}"
+        export SSH_PUBLIC_KEY_PARAMETER="${local.ssm_ssh_key_path}"
 
         # replace all variables with their value
-        envsubst < /opt/k8s/k8s_manifest/karpenter/karpenter-nodeclass.yaml > /tmp/karpenter-nodeclass.yaml
+        envsubst '$${BASTION_HOST_PRIVATE_IP} $${BUCKET} $${REGION} $${SSM_PARAMETER_PATH} $${SSH_PUBLIC_KEY_PARAMETER}' < /opt/k8s/k8s_manifest/karpenter/karpenter-nodeclass.yaml > /tmp/karpenter-nodeclass.yaml
 
         # Apply EC2NodeClass & NodePool
         kubectl apply -f /tmp/karpenter-nodeclass.yaml
         kubectl apply -f /opt/k8s/k8s_manifest/karpenter/karpenter-nodepool.yaml
       EOT
+      ,
+      "sudo rm -f /tmp/karpenter-nodeclass.yaml",
+      "sudo rm -rf /opt/k8s/"
     ]
   }
 }
@@ -834,6 +883,33 @@ resource "terraform_data" "install_tmux" {
     inline = [
       "sudo apt update",
       "sudo apt install tmux -y"
+    ]
+  }
+}
+
+resource "terraform_data" "install_hey" {
+  depends_on = [
+    aws_instance.instances["bastion_host"],
+    aws_instance.instances["master"],
+    terraform_data.configure_apt_proxy,
+    terraform_data.karpenter_manifest_apply,
+    terraform_data.install_tmux
+  ]
+  connection {
+    type        = "ssh"
+    host        = aws_instance.instances["master"].private_ip
+    user        = "ubuntu"
+    private_key = file(local.access_key)
+
+    bastion_host        = aws_instance.instances["bastion_host"].public_ip
+    bastion_user        = "ubuntu"
+    bastion_private_key = file(local.access_key)
+  }
+
+  provisioner "remote-exec" {
+    inline = [
+      "sudo apt update",
+      "sudo apt install hey -y"
     ]
   }
 }

@@ -8,7 +8,8 @@ locals {
   karpenter_ns                   = "karpenter"
   karpenter_service_account_name = "karpenter"
 
-  ssm_parameter_path = "/k8s-worker/join-command"
+  ssm_ssh_key_path      = "/k8s-worker/ssh-public-key"
+  ssm_join_command_path = "/k8s-worker/join-command"
 
   # Use fileset() and filesha256() to detect changes in files.
   # Kubernetes setup scripts
@@ -27,8 +28,14 @@ locals {
     file => filesha256("${path.module}/manifests/${file}")
   }
 
-  k8s_config = {
+  k8s_config_master = {
     instance_type               = "c7i-flex.large"
+    associate_public_ip_address = false
+    volume_size                 = 8
+    volume_type                 = "gp3"
+  }
+  k8s_config_worker = {
+    instance_type               = "t3.small"
     associate_public_ip_address = false
     volume_size                 = 8
     volume_type                 = "gp3"
@@ -43,13 +50,12 @@ locals {
       volume_size                 = 8
       volume_type                 = "gp3"
     })
-    master = merge(local.common, local.k8s_config, {
+    master = merge(local.common, local.k8s_config_master, {
       subnet_id              = aws_subnet.subnet_private_1.id
       vpc_security_group_ids = [aws_security_group.my_sg["k8s-master-sg"].id]
       }
     )
-    worker-1 = merge(
-      local.common, local.k8s_config,
+    worker-1 = merge(local.common, local.k8s_config_worker,
       {
         subnet_id              = aws_subnet.subnet_private_2.id
         vpc_security_group_ids = [aws_security_group.my_sg["k8s-worker-sg"].id]

@@ -4,6 +4,9 @@ resource "aws_security_group" "my_sg" {
   name        = each.key
   description = "Security group for ${each.key}"
   vpc_id      = aws_vpc.vpc.id
+  tags = {
+    Name = each.key
+  }
 }
 
 resource "aws_vpc_security_group_ingress_rule" "allow_tcp_ipv4" {
